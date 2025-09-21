@@ -69,6 +69,13 @@ interface InvoiceFormData {
   termsConditions?: string
   template: string
   currency: string
+  placeOfSupply?: string
+  reverseCharge: boolean
+  gstTreatment: string
+  cgstAmount: number
+  sgstAmount: number
+  igstAmount: number
+  cessAmount: number
   billingAddress?: string
   shippingAddress?: string
   poNumber?: string

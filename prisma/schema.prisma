@@ -49,6 +49,14 @@ enum PaymentMethod {
   WALLET
 }
 
+enum GstTreatment {
+  REGULAR
+  COMPOSITION
+  EXEMPT
+  NIL_RATED
+  NON_GST
+}
+
 // Company/Settings
 model Company {
   id          String   @id @default(cuid())
@@ -93,9 +101,13 @@ model Party {
   address         String?
   city            String?
   state           String?
-  country         String?
+  country         String?       @default("India")
   postalCode      String?
-  taxNumber       String?
+  taxNumber       String?       // Legacy field, kept for compatibility
+  gstNumber       String?       // GST Registration Number (GSTIN)
+  panNumber       String?       // Permanent Account Number (PAN)
+  stateCode       String?       // State code for GST (e.g., "27" for Maharashtra)
+  placeOfSupply   String?       // Place of supply for GST calculation
   paymentTerms    Int?          // Days
   creditLimit     Decimal?      @db.Decimal(10, 2)
   notes           String?
@@ -125,7 +137,10 @@ model Item {
   stockQuantity Int               @default(0)
   minStock      Int               @default(0)
   unit          String            @default("pcs")
-  taxRate       Decimal           @default(0) @db.Decimal(5, 2)
+  taxRate       Decimal           @default(0) @db.Decimal(5, 2)  // Legacy field
+  gstRate       Decimal           @default(18) @db.Decimal(5, 2) // GST rate for this item
+  hsnCode       String?           // Harmonized System of Nomenclature code for goods
+  sacCode       String?           // Services Accounting Code for services
   isActive      Boolean           @default(true)
   isService     Boolean           @default(false)
   createdAt     DateTime          @default(now())
@@ -149,9 +164,15 @@ model Transaction {
   supplierId      String?
   supplier        Party?            @relation("SupplierTransactions", fields: [supplierId], references: [id])
   subtotal        Decimal           @db.Decimal(10, 2)
-  taxAmount       Decimal           @default(0) @db.Decimal(10, 2)
+  taxAmount       Decimal           @default(0) @db.Decimal(10, 2)  // Legacy total tax
+  cgstAmount      Decimal           @default(0) @db.Decimal(10, 2)  // Central GST
+  sgstAmount      Decimal           @default(0) @db.Decimal(10, 2)  // State GST
+  igstAmount      Decimal           @default(0) @db.Decimal(10, 2)  // Integrated GST
+  cessAmount      Decimal           @default(0) @db.Decimal(10, 2)  // Cess amount
   discountAmount  Decimal           @default(0) @db.Decimal(10, 2)
   totalAmount     Decimal           @db.Decimal(10, 2)
+  placeOfSupply   String?           // Place of supply for GST calculation
+  reverseCharge   Boolean           @default(false) // Reverse charge mechanism
   paymentStatus   PaymentStatus     @default(PENDING)
   paymentMethod   PaymentMethod?
   notes           String?
@@ -180,7 +201,17 @@ model TransactionItem {
   quantity      Int
   unitPrice     Decimal     @db.Decimal(10, 2)
   discount      Decimal     @default(0) @db.Decimal(10, 2)
-  taxRate       Decimal     @default(0) @db.Decimal(5, 2)
+  taxRate       Decimal     @default(0) @db.Decimal(5, 2)  // Legacy field
+  cgstRate      Decimal     @default(0) @db.Decimal(5, 2)  // Central GST rate
+  sgstRate      Decimal     @default(0) @db.Decimal(5, 2)  // State GST rate
+  igstRate      Decimal     @default(0) @db.Decimal(5, 2)  // Integrated GST rate
+  cessRate      Decimal     @default(0) @db.Decimal(5, 2)  // Cess rate
+  cgstAmount    Decimal     @default(0) @db.Decimal(10, 2) // Central GST amount
+  sgstAmount    Decimal     @default(0) @db.Decimal(10, 2) // State GST amount
+  igstAmount    Decimal     @default(0) @db.Decimal(10, 2) // Integrated GST amount
+  cessAmount    Decimal     @default(0) @db.Decimal(10, 2) // Cess amount
+  hsnCode       String?     // HSN code for this line item
+  sacCode       String?     // SAC code for this line item
   totalAmount   Decimal     @db.Decimal(10, 2)
 
   @@map("transaction_items")
@@ -198,18 +229,25 @@ model Invoice {
   dueDate         DateTime
   status          InvoiceStatus @default(DRAFT)
   subtotal        Decimal       @db.Decimal(10, 2)
-  taxAmount       Decimal       @default(0) @db.Decimal(10, 2)
+  taxAmount       Decimal       @default(0) @db.Decimal(10, 2)  // Legacy total tax
+  cgstAmount      Decimal       @default(0) @db.Decimal(10, 2)  // Central GST
+  sgstAmount      Decimal       @default(0) @db.Decimal(10, 2)  // State GST
+  igstAmount      Decimal       @default(0) @db.Decimal(10, 2)  // Integrated GST
+  cessAmount      Decimal       @default(0) @db.Decimal(10, 2)  // Cess amount
   discountAmount  Decimal       @default(0) @db.Decimal(10, 2)
   totalAmount     Decimal       @db.Decimal(10, 2)
   paidAmount      Decimal       @default(0) @db.Decimal(10, 2)
   balanceAmount   Decimal       @db.Decimal(10, 2)
+  placeOfSupply   String?       // Place of supply for GST calculation
+  reverseCharge   Boolean       @default(false) // Reverse charge mechanism
+  gstTreatment    GstTreatment  @default(REGULAR) // GST treatment type
   paymentTerms    String?       // e.g., "Net 30", "Due on Receipt"
   paymentTermsDays Int?          // Number of days for payment
   notes           String?
   termsConditions String?
   // Enhanced fields for comprehensive invoice management
   template        String        @default("modern") // Template design
-  currency        String        @default("USD")
+  currency        String        @default("INR")   // Changed default to INR
   exchangeRate    Decimal       @default(1) @db.Decimal(10, 4)
   billingAddress  String?       // Customer billing address
   shippingAddress String?       // Customer shipping address
@@ -241,7 +279,17 @@ model InvoiceItem {
   quantity    Int
   unitPrice   Decimal @db.Decimal(10, 2)
   discount    Decimal @default(0) @db.Decimal(10, 2)
-  taxRate     Decimal @default(0) @db.Decimal(5, 2)
+  taxRate     Decimal @default(0) @db.Decimal(5, 2)  // Legacy field
+  cgstRate    Decimal @default(0) @db.Decimal(5, 2)  // Central GST rate
+  sgstRate    Decimal @default(0) @db.Decimal(5, 2)  // State GST rate
+  igstRate    Decimal @default(0) @db.Decimal(5, 2)  // Integrated GST rate
+  cessRate    Decimal @default(0) @db.Decimal(5, 2)  // Cess rate
+  cgstAmount  Decimal @default(0) @db.Decimal(10, 2) // Central GST amount
+  sgstAmount  Decimal @default(0) @db.Decimal(10, 2) // State GST amount
+  igstAmount  Decimal @default(0) @db.Decimal(10, 2) // Integrated GST amount
+  cessAmount  Decimal @default(0) @db.Decimal(10, 2) // Cess amount
+  hsnCode     String? // HSN code for this line item
+  sacCode     String? // SAC code for this line item
   totalAmount Decimal @db.Decimal(10, 2)
 
   @@map("invoice_items")

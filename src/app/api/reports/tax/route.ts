@@ -94,47 +94,63 @@ async function generateTaxSummaryReport(dateFrom: Date, dateTo: Date) {
     _count: true,
   })
 
-  // Tax by rate from sales transactions
-  const salesTaxByRate = await prisma.$queryRaw`
+  // GST by rate from sales transactions
+  const salesGSTByRate = await prisma.$queryRaw`
     SELECT
-      ti."taxRate",
-      SUM(ti."totalAmount")::decimal as taxable_amount,
-      SUM(ti."totalAmount" * ti."taxRate" / 100)::decimal as tax_amount,
+      COALESCE(ti."igstRate", ti."cgstRate" + ti."sgstRate", ti."taxRate") as gst_rate,
+      SUM(ti."totalAmount" - COALESCE(ti."cgstAmount", 0) - COALESCE(ti."sgstAmount", 0) - COALESCE(ti."igstAmount", 0))::decimal as taxable_amount,
+      SUM(COALESCE(ti."cgstAmount", 0))::decimal as cgst_amount,
+      SUM(COALESCE(ti."sgstAmount", 0))::decimal as sgst_amount,
+      SUM(COALESCE(ti."igstAmount", 0))::decimal as igst_amount,
+      SUM(COALESCE(ti."cessAmount", 0))::decimal as cess_amount,
+      SUM(COALESCE(ti."cgstAmount", 0) + COALESCE(ti."sgstAmount", 0) + COALESCE(ti."igstAmount", 0))::decimal as total_gst_amount,
       COUNT(*)::int as transaction_count
     FROM transaction_items ti
     JOIN transactions t ON ti."transactionId" = t.id
     WHERE t."type" = 'SALE'
       AND t."date" >= ${dateFrom}
       AND t."date" <= ${dateTo}
-      AND ti."taxRate" > 0
-    GROUP BY ti."taxRate"
-    ORDER BY ti."taxRate"
+      AND (ti."cgstRate" > 0 OR ti."sgstRate" > 0 OR ti."igstRate" > 0 OR ti."taxRate" > 0)
+    GROUP BY COALESCE(ti."igstRate", ti."cgstRate" + ti."sgstRate", ti."taxRate")
+    ORDER BY gst_rate
   ` as Array<{
-    taxRate: number
+    gst_rate: number
     taxable_amount: number
-    tax_amount: number
+    cgst_amount: number
+    sgst_amount: number
+    igst_amount: number
+    cess_amount: number
+    total_gst_amount: number
     transaction_count: number
   }>
 
-  // Tax by rate from purchase transactions
-  const purchaseTaxByRate = await prisma.$queryRaw`
+  // Purchase GST by rate (Input Tax Credit)
+  const purchaseGSTByRate = await prisma.$queryRaw`
     SELECT
-      ti."taxRate",
-      SUM(ti."totalAmount")::decimal as taxable_amount,
-      SUM(ti."totalAmount" * ti."taxRate" / 100)::decimal as tax_amount,
+      COALESCE(ti."igstRate", ti."cgstRate" + ti."sgstRate", ti."taxRate") as gst_rate,
+      SUM(ti."totalAmount" - COALESCE(ti."cgstAmount", 0) - COALESCE(ti."sgstAmount", 0) - COALESCE(ti."igstAmount", 0))::decimal as taxable_amount,
+      SUM(COALESCE(ti."cgstAmount", 0))::decimal as cgst_amount,
+      SUM(COALESCE(ti."sgstAmount", 0))::decimal as sgst_amount,
+      SUM(COALESCE(ti."igstAmount", 0))::decimal as igst_amount,
+      SUM(COALESCE(ti."cessAmount", 0))::decimal as cess_amount,
+      SUM(COALESCE(ti."cgstAmount", 0) + COALESCE(ti."sgstAmount", 0) + COALESCE(ti."igstAmount", 0))::decimal as total_gst_amount,
       COUNT(*)::int as transaction_count
     FROM transaction_items ti
     JOIN transactions t ON ti."transactionId" = t.id
     WHERE t."type" = 'PURCHASE'
       AND t."date" >= ${dateFrom}
       AND t."date" <= ${dateTo}
-      AND ti."taxRate" > 0
-    GROUP BY ti."taxRate"
-    ORDER BY ti."taxRate"
+      AND (ti."cgstRate" > 0 OR ti."sgstRate" > 0 OR ti."igstRate" > 0 OR ti."taxRate" > 0)
+    GROUP BY COALESCE(ti."igstRate", ti."cgstRate" + ti."sgstRate", ti."taxRate")
+    ORDER BY gst_rate
   ` as Array<{
-    taxRate: number
+    gst_rate: number
     taxable_amount: number
-    tax_amount: number
+    cgst_amount: number
+    sgst_amount: number
+    igst_amount: number
+    cess_amount: number
+    total_gst_amount: number
     transaction_count: number
   }>
 
@@ -157,9 +173,10 @@ async function generateTaxSummaryReport(dateFrom: Date, dateTo: Date) {
     _count: true,
   })
 
-  const outputTax = Number(salesTaxData._sum.taxAmount || 0) + Number(invoiceTaxData._sum.taxAmount || 0)
-  const inputTax = Number(purchaseTaxData._sum.taxAmount || 0)
-  const netTaxLiability = outputTax - inputTax
+  // Calculate GST totals
+  const outputGST = Number(salesTaxData._sum.taxAmount || 0) + Number(invoiceTaxData._sum.taxAmount || 0)
+  const inputGST = Number(purchaseTaxData._sum.taxAmount || 0)
+  const netGSTLiability = outputGST - inputGST
 
   const report = {
     period: {
@@ -167,30 +184,38 @@ async function generateTaxSummaryReport(dateFrom: Date, dateTo: Date) {
       to: dateTo,
     },
     summary: {
-      outputTax: {
+      outputGST: {
         fromSales: Number(salesTaxData._sum.taxAmount || 0),
         fromInvoices: Number(invoiceTaxData._sum.taxAmount || 0),
-        total: outputTax,
+        total: outputGST,
       },
-      inputTax: {
+      inputGST: {
         fromPurchases: Number(purchaseTaxData._sum.taxAmount || 0),
-        total: inputTax,
+        total: inputGST,
       },
-      netTaxLiability,
+      netGSTLiability,
       taxableRevenue: Number(salesTaxData._sum.subtotal || 0) + Number(invoiceTaxData._sum.subtotal || 0),
       taxablePurchases: Number(purchaseTaxData._sum.subtotal || 0),
     },
     breakdown: {
-      salesTaxByRate: salesTaxByRate.map(rate => ({
-        taxRate: rate.taxRate,
+      salesGSTByRate: salesGSTByRate.map(rate => ({
+        rate: Number(rate.gst_rate),
         taxableAmount: Number(rate.taxable_amount),
-        taxAmount: Number(rate.tax_amount),
+        cgstAmount: Number(rate.cgst_amount),
+        sgstAmount: Number(rate.sgst_amount),
+        igstAmount: Number(rate.igst_amount),
+        cessAmount: Number(rate.cess_amount),
+        totalGSTAmount: Number(rate.total_gst_amount),
         transactionCount: rate.transaction_count,
       })),
-      purchaseTaxByRate: purchaseTaxByRate.map(rate => ({
-        taxRate: rate.taxRate,
+      purchaseGSTByRate: purchaseGSTByRate.map(rate => ({
+        rate: Number(rate.gst_rate),
         taxableAmount: Number(rate.taxable_amount),
-        taxAmount: Number(rate.tax_amount),
+        cgstAmount: Number(rate.cgst_amount),
+        sgstAmount: Number(rate.sgst_amount),
+        igstAmount: Number(rate.igst_amount),
+        cessAmount: Number(rate.cess_amount),
+        totalGSTAmount: Number(rate.total_gst_amount),
         transactionCount: rate.transaction_count,
       })),
     },

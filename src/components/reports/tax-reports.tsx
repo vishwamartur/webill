@@ -33,9 +33,11 @@ export function TaxReports() {
   }, [reportType, period])
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-IN', {
       style: 'currency',
-      currency: 'USD',
+      currency: 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(amount)
   }
 
@@ -44,8 +46,8 @@ export function TaxReports() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Tax Reports</h2>
-          <p className="text-gray-600">GST/VAT summaries and tax compliance reporting</p>
+          <h2 className="text-xl font-semibold">GST Reports</h2>
+          <p className="text-gray-600">GST summaries, returns, and tax compliance reporting</p>
         </div>
         
         <div className="flex items-center gap-4">

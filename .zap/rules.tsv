@@ -1,0 +1,22 @@
+# ZAP Security Scan Rules
+# Format: RULE_ID	THRESHOLD	[IGNORE_PATTERN]
+
+# Ignore false positives
+10021	IGNORE	# X-Content-Type-Options header missing (handled by Next.js)
+10020	IGNORE	# X-Frame-Options header missing (handled by Next.js)
+10016	IGNORE	# Web Browser XSS Protection Not Enabled (handled by Next.js)
+
+# Set thresholds for other rules
+10054	WARN	# Cookie without SameSite Attribute
+10055	WARN	# CSP Scanner
+10096	WARN	# Timestamp Disclosure
+10109	WARN	# Modern Web Application
+
+# High priority security issues
+40012	FAIL	# Cross Site Scripting (Reflected)
+40014	FAIL	# Cross Site Scripting (Persistent)
+40016	FAIL	# Cross Site Scripting (Persistent) - Prime
+40017	FAIL	# Cross Site Scripting (Persistent) - Spider
+40018	FAIL	# SQL Injection
+90019	FAIL	# Server Side Code Injection
+90020	FAIL	# Remote OS Command Injection

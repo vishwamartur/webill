@@ -1,0 +1,183 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [ develop ]
+
+env:
+  NODE_VERSION: '18'
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging Environment
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'push' }}
+    
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.preview-url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "preview-url=$url" >> $GITHUB_OUTPUT
+
+      - name: Run Database Migrations
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          npm ci
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Run Post-Deployment Health Checks
+        run: |
+          # Wait for deployment to be ready
+          sleep 30
+          
+          # Health check endpoints
+          curl -f ${{ steps.deploy.outputs.preview-url }}/api/health || exit 1
+          curl -f ${{ steps.deploy.outputs.preview-url }}/api/reports/dashboard?period=this-month || exit 1
+
+      - name: Run Smoke Tests
+        env:
+          STAGING_URL: ${{ steps.deploy.outputs.preview-url }}
+        run: npm run test:smoke
+
+      - name: Update Deployment Status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: context.payload.deployment.id,
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.preview-url }}',
+              description: 'Deployment to staging successful'
+            });
+
+  # Performance Monitoring
+  performance-monitoring:
+    name: Performance Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Performance Tests
+        env:
+          STAGING_URL: ${{ needs.deploy-staging.outputs.preview-url }}
+        run: |
+          # Run Lighthouse performance audit
+          npx lighthouse $STAGING_URL --output=json --output-path=./lighthouse-report.json
+          
+          # Run load testing
+          npm run test:load
+
+      - name: Upload Performance Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-reports
+          path: |
+            lighthouse-report.json
+            load-test-results.json
+
+  # Security Testing
+  security-testing:
+    name: Security Testing
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run OWASP ZAP Security Scan
+        uses: zaproxy/action-full-scan@v0.10.0
+        with:
+          target: ${{ needs.deploy-staging.outputs.preview-url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+  # Notify Deployment
+  notify-deployment:
+    name: Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, performance-monitoring, security-testing]
+    if: always()
+    
+    steps:
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: |
+            🚀 Staging Deployment Complete
+            
+            Environment: Staging
+            URL: ${{ needs.deploy-staging.outputs.preview-url }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            
+            Performance: ${{ needs.performance-monitoring.result }}
+            Security: ${{ needs.security-testing.result }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Create GitHub Release (if main branch)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: staging-${{ github.run_number }}
+          release_name: Staging Release ${{ github.run_number }}
+          body: |
+            Automated staging deployment
+            
+            **Changes:**
+            ${{ github.event.head_commit.message }}
+            
+            **Deployment URL:** ${{ needs.deploy-staging.outputs.preview-url }}
+          draft: false
+          prerelease: true

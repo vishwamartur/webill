@@ -371,18 +371,51 @@ We welcome contributions to WeBill! Please follow these guidelines:
 ### Testing
 
 ```bash
-# Run tests
-npm test
+# Run all tests
+npm test                    # Unit tests
+npm run test:integration    # Integration tests
+npm run test:smoke          # E2E smoke tests
+npm run test:load           # Performance/load tests
 
-# Run linting
-npm run lint
-
-# Type checking
-npm run type-check
+# Code quality
+npm run lint               # ESLint
+npm run type-check         # TypeScript checking
+npm run format             # Code formatting
 
 # Build verification
 npm run build
 ```
+
+## 🚀 CI/CD Pipeline
+
+WeBill includes a comprehensive CI/CD pipeline with automated testing, security scanning, and deployment.
+
+### Pipeline Features
+
+- **Continuous Integration**: Automated testing on every pull request
+- **Code Quality**: TypeScript, ESLint, and Prettier checks
+- **Security Scanning**: Dependency auditing and vulnerability detection
+- **Performance Testing**: Lighthouse and load testing
+- **Automated Deployment**: Staging and production deployments
+- **Health Monitoring**: Post-deployment health checks and alerts
+
+### Deployment Environments
+
+- **Development**: Local development environment
+- **Staging**: `https://webill-staging.vercel.app` (auto-deploy from `develop`)
+- **Production**: `https://webill.vercel.app` (manual approval required)
+
+### Quick Deployment
+
+```bash
+# Deploy to staging
+./scripts/deploy.sh staging
+
+# Deploy to production (requires approval)
+./scripts/deploy.sh production
+```
+
+For detailed CI/CD setup instructions, see [CI/CD Setup Guide](docs/CI-CD-SETUP.md).
 
 ## 📄 License
 

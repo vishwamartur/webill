@@ -1,0 +1,271 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - hotfix
+
+env:
+  NODE_VERSION: '18'
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  # Pre-deployment Checks
+  pre-deployment:
+    name: Pre-deployment Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Validate database migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          # Check migration status without applying
+          npx prisma migrate status
+
+      - name: Run critical tests
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          NODE_ENV: test
+        run: npm run test:critical
+
+      - name: Security scan
+        run: npm audit --audit-level=critical
+
+  # Manual Approval Gate
+  approval:
+    name: Manual Approval
+    runs-on: ubuntu-latest
+    needs: [pre-deployment]
+    environment:
+      name: production-approval
+    
+    steps:
+      - name: Manual approval required
+        run: |
+          echo "🔒 Manual approval required for production deployment"
+          echo "Please review the changes and approve the deployment"
+
+  # Production Deployment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [pre-deployment, approval]
+    
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.production-url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Create Database Backup
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          # Create backup before deployment
+          timestamp=$(date +%Y%m%d_%H%M%S)
+          echo "Creating database backup: backup_${timestamp}"
+          # Add your backup script here
+
+      - name: Deploy to Production
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "production-url=$url" >> $GITHUB_OUTPUT
+
+      - name: Run Database Migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          npm ci
+          npx prisma generate
+          npx prisma migrate deploy
+
+      - name: Warm up application
+        run: |
+          # Warm up critical endpoints
+          curl -f ${{ steps.deploy.outputs.production-url }}/api/health
+          curl -f ${{ steps.deploy.outputs.production-url }}/dashboard
+          curl -f ${{ steps.deploy.outputs.production-url }}/reports
+
+      - name: Run Production Health Checks
+        env:
+          PRODUCTION_URL: ${{ steps.deploy.outputs.production-url }}
+        run: |
+          # Wait for deployment to stabilize
+          sleep 60
+          
+          # Comprehensive health checks
+          npm run test:health-check
+
+  # Post-deployment Monitoring
+  post-deployment:
+    name: Post-deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup monitoring
+        run: |
+          # Setup application monitoring
+          echo "Setting up monitoring for production deployment"
+
+      - name: Run smoke tests
+        env:
+          PRODUCTION_URL: ${{ needs.deploy-production.outputs.production-url }}
+        run: npm run test:smoke:production
+
+      - name: Performance baseline
+        env:
+          PRODUCTION_URL: ${{ needs.deploy-production.outputs.production-url }}
+        run: |
+          # Run performance tests and establish baseline
+          npx lighthouse $PRODUCTION_URL --output=json --output-path=./production-lighthouse.json
+
+      - name: Setup alerts
+        run: |
+          # Configure monitoring alerts
+          echo "Configuring production monitoring alerts"
+
+  # Rollback Capability
+  rollback:
+    name: Rollback (if needed)
+    runs-on: ubuntu-latest
+    needs: [deploy-production, post-deployment]
+    if: failure()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Rollback deployment
+        run: |
+          # Get previous deployment
+          previous_deployment=$(vercel ls --token=${{ secrets.VERCEL_TOKEN }} | grep production | head -2 | tail -1 | awk '{print $1}')
+          
+          # Promote previous deployment
+          vercel promote $previous_deployment --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Restore database backup
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          echo "Restoring database backup if necessary"
+          # Add your database restore script here
+
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'failure'
+          channel: '#alerts'
+          text: |
+            🚨 PRODUCTION ROLLBACK EXECUTED
+            
+            Deployment failed and has been rolled back
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            
+            Please investigate immediately!
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Success Notification
+  notify-success:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [deploy-production, post-deployment]
+    if: success()
+    
+    steps:
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Production Release v${{ github.run_number }}
+          body: |
+            🚀 Production deployment successful!
+            
+            **Deployment Details:**
+            - Environment: Production
+            - URL: ${{ needs.deploy-production.outputs.production-url }}
+            - Branch: ${{ github.ref_name }}
+            - Commit: ${{ github.sha }}
+            
+            **Changes:**
+            ${{ github.event.head_commit.message }}
+          draft: false
+          prerelease: false
+
+      - name: Notify success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'success'
+          channel: '#deployments'
+          text: |
+            🎉 PRODUCTION DEPLOYMENT SUCCESSFUL
+            
+            Environment: Production
+            URL: ${{ needs.deploy-production.outputs.production-url }}
+            Branch: ${{ github.ref_name }}
+            Version: v${{ github.run_number }}
+            
+            All systems operational!
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

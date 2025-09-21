@@ -3,14 +3,15 @@ import { prisma } from '@/lib/prisma'
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const { reminderType = 'payment', customMessage } = await request.json()
-    
+
     // Get the invoice with customer details
     const invoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
       },
@@ -39,7 +40,7 @@ export async function POST(
 
     // Update invoice reminder tracking
     const updatedInvoice = await prisma.invoice.update({
-      where: { id: params.id },
+      where: { id },
       data: {
         remindersSent: invoice.remindersSent + 1,
         lastReminderDate: new Date(),
@@ -118,11 +119,12 @@ export async function POST(
 // Get reminder history for an invoice
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const invoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       select: {
         id: true,
         invoiceNo: true,

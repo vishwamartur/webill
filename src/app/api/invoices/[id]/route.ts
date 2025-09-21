@@ -3,11 +3,12 @@ import { prisma } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const invoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         transaction: true,
@@ -43,9 +44,10 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const body = await request.json()
     
     // Calculate due date if payment terms changed
@@ -60,12 +62,12 @@ export async function PUT(
     const result = await prisma.$transaction(async (tx) => {
       // Delete existing invoice items
       await tx.invoiceItem.deleteMany({
-        where: { invoiceId: params.id },
+        where: { invoiceId: id },
       })
 
       // Update the invoice
       const updatedInvoice = await tx.invoice.update({
-        where: { id: params.id },
+        where: { id },
         data: {
           customerId: body.customerId,
           transactionId: body.transactionId || null,
@@ -104,7 +106,7 @@ export async function PUT(
       if (body.items && body.items.length > 0) {
         await tx.invoiceItem.createMany({
           data: body.items.map((item: any) => ({
-            invoiceId: params.id,
+            invoiceId: id,
             itemId: item.itemId,
             quantity: parseInt(item.quantity),
             unitPrice: parseFloat(item.unitPrice),
@@ -120,7 +122,7 @@ export async function PUT(
 
     // Fetch the complete updated invoice
     const completeInvoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         transaction: true,
@@ -145,12 +147,13 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     // Check if invoice can be deleted (only DRAFT invoices should be deletable)
     const invoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
     })
 
     if (!invoice) {
@@ -169,7 +172,7 @@ export async function DELETE(
 
     // Delete the invoice (cascade will handle items)
     await prisma.invoice.delete({
-      where: { id: params.id },
+      where: { id },
     })
 
     return NextResponse.json({ message: 'Invoice deleted successfully' })

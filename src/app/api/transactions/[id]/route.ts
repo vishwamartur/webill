@@ -3,11 +3,12 @@ import { prisma } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const transaction = await prisma.transaction.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         supplier: true,
@@ -43,16 +44,17 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const body = await request.json()
-    
+
     // Start a transaction to ensure data consistency
     const result = await prisma.$transaction(async (tx) => {
       // Get the current transaction to check for inventory changes
       const currentTransaction = await tx.transaction.findUnique({
-        where: { id: params.id },
+        where: { id },
         include: {
           items: {
             include: {
@@ -121,7 +123,7 @@ export async function PUT(
       if (body.items && body.items.length > 0) {
         await tx.transactionItem.createMany({
           data: body.items.map((item: any) => ({
-            transactionId: params.id,
+            transactionId: id,
             itemId: item.itemId,
             quantity: parseInt(item.quantity),
             unitPrice: parseFloat(item.unitPrice),
@@ -174,7 +176,7 @@ export async function PUT(
 
     // Fetch the complete updated transaction
     const completeTransaction = await prisma.transaction.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         supplier: true,
@@ -199,14 +201,15 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     // Start a transaction to ensure data consistency
     await prisma.$transaction(async (tx) => {
       // Get the transaction to revert inventory changes
       const transaction = await tx.transaction.findUnique({
-        where: { id: params.id },
+        where: { id },
         include: {
           items: {
             include: {
@@ -251,7 +254,7 @@ export async function DELETE(
 
       // Delete the transaction (cascade will handle items and payments)
       await tx.transaction.delete({
-        where: { id: params.id },
+        where: { id },
       })
     })
 

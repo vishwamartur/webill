@@ -4,9 +4,10 @@ import { InvoiceStatus } from '@/generated/prisma'
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const { status, paymentAmount, paymentMethod, paymentReference } = await request.json()
     
     if (!status) {
@@ -27,7 +28,7 @@ export async function PUT(
 
     // Get current invoice
     const currentInvoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
     })
 
     if (!currentInvoice) {
@@ -63,7 +64,7 @@ export async function PUT(
             await tx.payment.create({
               data: {
                 paymentNo: `PAY-${Date.now()}`,
-                invoiceId: params.id,
+                invoiceId: id,
                 amount: parseFloat(paymentAmount.toString()),
                 paymentDate: new Date(),
                 paymentMethod,
@@ -91,7 +92,7 @@ export async function PUT(
 
       // Update the invoice
       const updatedInvoice = await tx.invoice.update({
-        where: { id: params.id },
+        where: { id },
         data: updateData,
       })
 
@@ -100,7 +101,7 @@ export async function PUT(
 
     // Fetch the complete updated invoice
     const completeInvoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         customer: true,
         transaction: true,
@@ -126,11 +127,12 @@ export async function PUT(
 // Get invoice status history and analytics
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const invoice = await prisma.invoice.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         payments: {
           orderBy: { paymentDate: 'desc' },

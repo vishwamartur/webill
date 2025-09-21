@@ -155,12 +155,17 @@ model Transaction {
   paymentStatus   PaymentStatus     @default(PENDING)
   paymentMethod   PaymentMethod?
   notes           String?
+  // Fields for EXPENSE and INCOME transactions
+  description     String?           // Description for expense/income
+  category        String?           // Category for expense/income
+  reference       String?           // Reference number for expense/income
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
   // Relations
   items           TransactionItem[]
   payments        Payment[]
+  invoices        Invoice[]
 
   @@map("transactions")
 }
@@ -187,6 +192,8 @@ model Invoice {
   invoiceNo       String        @unique
   customerId      String
   customer        Party         @relation(fields: [customerId], references: [id])
+  transactionId   String?       // Link to original sales transaction
+  transaction     Transaction?  @relation(fields: [transactionId], references: [id])
   issueDate       DateTime      @default(now())
   dueDate         DateTime
   status          InvoiceStatus @default(DRAFT)
@@ -196,9 +203,24 @@ model Invoice {
   totalAmount     Decimal       @db.Decimal(10, 2)
   paidAmount      Decimal       @default(0) @db.Decimal(10, 2)
   balanceAmount   Decimal       @db.Decimal(10, 2)
-  paymentTerms    String?
+  paymentTerms    String?       // e.g., "Net 30", "Due on Receipt"
+  paymentTermsDays Int?          // Number of days for payment
   notes           String?
   termsConditions String?
+  // Enhanced fields for comprehensive invoice management
+  template        String        @default("modern") // Template design
+  currency        String        @default("USD")
+  exchangeRate    Decimal       @default(1) @db.Decimal(10, 4)
+  billingAddress  String?       // Customer billing address
+  shippingAddress String?       // Customer shipping address
+  poNumber        String?       // Purchase order number
+  reference       String?       // Reference number
+  isRecurring     Boolean       @default(false)
+  recurringPeriod String?       // "monthly", "quarterly", "yearly"
+  nextInvoiceDate DateTime?     // For recurring invoices
+  sentDate        DateTime?     // When invoice was sent
+  remindersSent   Int           @default(0) // Number of reminders sent
+  lastReminderDate DateTime?    // Last reminder sent date
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
